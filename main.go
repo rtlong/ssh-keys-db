@@ -93,9 +93,6 @@ func saveDB(filepath string, db *KeysDB) {
 	json_encoder.Encode(db)
 }
 
-// func getPublicKey(privateKey string) {
-// }
-
 var SshkeygenFingerprintPattern = regexp.MustCompile(`\A(\d+) ((?:[0-9a-f]{2}:)+[0-9a-f]{2})\s+.+?\s+\((\w+)\)\s*\z`)
 
 func fingerprintKeyFile(filepath string) *KeyFingerprint {
