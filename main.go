@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	kingpin "gopkg.in/alecthomas/kingpin.v1"
@@ -89,8 +90,14 @@ func saveDB(filepath string, db *KeysDB) {
 	}
 	defer file.Close()
 
-	json_encoder := json.NewEncoder(file)
-	json_encoder.Encode(db)
+	marshaled, err := json.Marshal(db)
+	if err != nil {
+		panic(err)
+	}
+	var out bytes.Buffer
+	json.Indent(&out, marshaled, "", "\t")
+	out.WriteTo(file)
+	file.WriteString("\n")
 }
 
 var SshkeygenFingerprintPattern = regexp.MustCompile(`\A(\d+) ((?:[0-9a-f]{2}:)+[0-9a-f]{2})\s+.+?\s+\((\w+)\)\s*\z`)
@@ -191,8 +198,13 @@ func main() {
 		key.AddUse(&KeyUse{Type: *usageType, Name: *usageName, Description: *usageDescription, Since: usageSince})
 		saveDB(dbFilepath(), db)
 
-		json_encoder := json.NewEncoder(os.Stdout)
-		json_encoder.Encode(key)
+		marshaled, err := json.Marshal(key)
+		if err != nil {
+			panic(err)
+		}
+		var out bytes.Buffer
+		json.Indent(&out, marshaled, "", "\t")
+		out.WriteTo(os.Stdout)
 
 	case "query":
 		if *queryFingerprint == "" {
@@ -202,8 +214,6 @@ func main() {
 
 		db := loadDB(dbFilepath())
 
-		json_encoder := json.NewEncoder(os.Stdout)
-
 		lookup := Lookup{DigestQuery: *queryFingerprint}
 		key, ok := db.LookupKey(*queryFingerprint)
 		if ok {
@@ -212,6 +222,13 @@ func main() {
 			lookup.Error = "key not found"
 			defer os.Exit(1)
 		}
-		json_encoder.Encode(lookup)
+
+		marshaled, err := json.Marshal(lookup)
+		if err != nil {
+			panic(err)
+		}
+		var out bytes.Buffer
+		json.Indent(&out, marshaled, "", "\t")
+		out.WriteTo(os.Stdout)
 	}
 }
