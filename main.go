@@ -2,13 +2,19 @@ package main
 
 import (
 	"bytes"
+	"crypto/md5"
+	// "crypto/sha1"
+	// "crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"golang.org/x/crypto/ssh"
 	kingpin "gopkg.in/alecthomas/kingpin.v1"
 	"os"
-	"os/exec"
+	// "os/exec"
 	"regexp"
-	"strconv"
+	// "strconv"
+	"strings"
 	"time"
 )
 
@@ -100,36 +106,100 @@ func saveDB(filepath string, db *KeysDB) {
 	file.WriteString("\n")
 }
 
-var SshkeygenFingerprintPattern = regexp.MustCompile(`\A(\d+) ((?:[0-9a-f]{2}:)+[0-9a-f]{2})\s+.+?\s+\((\w+)\)\s*\z`)
+var sshKeyTypePattern = regexp.MustCompile(`dsa|dss|rsa`)
 
-func fingerprintKeyFile(filepath string) *KeyFingerprint {
-	var err error
-	cmd := exec.Command("ssh-keygen", "-lf", filepath)
-
-	output, err := cmd.CombinedOutput()
-	if _, ok := err.(*exec.ExitError); ok {
-		fmt.Println(string(output))
-		panic(err)
-	} else if err != nil {
-		panic(err)
+func normalizeSshKeyType(keyType string) string {
+	match := sshKeyTypePattern.FindString(keyType)
+	if match == "" {
+		panic("SSH key type doesn't match pattern")
 	}
+	return strings.ToUpper(match)
+}
 
-	matches := SshkeygenFingerprintPattern.FindSubmatch(output)
-	if matches == nil {
-		panic(fmt.Sprintf("ssh-keygen output didn't match pattern!\n%s", output))
-	}
-
-	length, err := strconv.Atoi(string(matches[1]))
+func fingerprintKeyFileNative(filepath string) *KeyFingerprint {
+	var buf bytes.Buffer
+	file, err := os.Open(filepath)
 	if err != nil {
-		panic(fmt.Sprintf("Couldn't parse key length as int: %s", matches[1]))
+		panic(err)
 	}
+	_, err = buf.ReadFrom(file)
+	if err != nil {
+		panic(err)
+	}
+
+	pubkey, _, _, _, err := ssh.ParseAuthorizedKey(buf.Bytes())
+	if err != nil {
+		panic(err)
+	}
+
+	md5sum := md5.Sum(pubkey.Marshal())
 
 	return &KeyFingerprint{
-		Length: length,
-		Digest: string(matches[2]),
-		Type:   string(matches[3]),
+		Digest: ColonDelimitedHex(md5sum[:]),
+		Type:   normalizeSshKeyType(pubkey.Type()),
+		Length: determinePubkeyLength(pubkey),
 	}
 }
+
+func determinePubkeyLength(pubkey ssh.PublicKey) int {
+	// fields := DeserializePubkey(pubkey.Marshal())
+	// modulus := fields[2]
+	// fmt.Printf("len(pubkey.modulus) = %#v\n", len(modulus))
+	return 0
+}
+
+func DeserializePubkey(pubkey []byte) (fields [][]byte) {
+	var cStart, cEnd uint32
+	var length uint32
+	for cStart < uint32(len(pubkey)) {
+		cEnd += 4
+		length = binary.BigEndian.Uint32(pubkey[cStart:cEnd])
+		cStart = cEnd
+		cEnd += length
+		fields = append(fields, pubkey[cStart:cEnd])
+		cStart = cEnd
+	}
+	return
+}
+
+func ColonDelimitedHex(data []byte) string {
+	var out []string
+	for _, b := range data {
+		out = append(out, fmt.Sprintf("%02x", b))
+	}
+	return strings.Join(out, ":")
+}
+
+var SshkeygenFingerprintPattern = regexp.MustCompile(`\A(\d+) ((?:[0-9a-f]{2}:)+[0-9a-f]{2})\s+.+?\s+\((\w+)\)\s*\z`)
+
+// func fingerprintKeyFileExt(filepath string) *KeyFingerprint {
+// 	var err error
+// 	cmd := exec.Command("ssh-keygen", "-E", "md5", "-lf", filepath)
+
+// 	output, err := cmd.CombinedOutput()
+// 	if _, ok := err.(*exec.ExitError); ok {
+// 		fmt.Println(string(output))
+// 		panic(err)
+// 	} else if err != nil {
+// 		panic(err)
+// 	}
+
+// 	matches := SshkeygenFingerprintPattern.FindSubmatch(output)
+// 	if matches == nil {
+// 		panic(fmt.Sprintf("ssh-keygen output didn't match pattern!\n%s", output))
+// 	}
+
+// 	length, err := strconv.Atoi(string(matches[1]))
+// 	if err != nil {
+// 		panic(fmt.Sprintf("Couldn't parse key length as int: %s", matches[1]))
+// 	}
+
+// 	return &KeyFingerprint{
+// 		Length: length,
+// 		Digest: string(matches[2]),
+// 		Type:   string(matches[3]),
+// 	}
+// }
 
 func (k *Key) AddUse(newUse *KeyUse) {
 	for _, existingUse := range k.Uses {
@@ -182,7 +252,7 @@ func main() {
 
 	switch kingpin.Parse() {
 	case "record":
-		fingerprint := fingerprintKeyFile(*filepath)
+		fingerprint := fingerprintKeyFileNative(*filepath)
 		db := loadDB(dbFilepath())
 		key := db.FindOrCreateKey(fingerprint)
 
@@ -208,7 +278,7 @@ func main() {
 
 	case "query":
 		if *queryFingerprint == "" {
-			fingerprint := fingerprintKeyFile(*filepath)
+			fingerprint := fingerprintKeyFileNative(*filepath)
 			queryFingerprint = &fingerprint.Digest
 		}
 
